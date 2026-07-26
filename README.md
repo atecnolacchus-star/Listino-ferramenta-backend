@@ -2,12 +2,34 @@ BACKEND — LISTINO FERRAMENTA
 ===============================
 
 Indirizzo pubblicato attualmente in uso dal front-end:
-    https://listino-ferramenta-backend.onrender.com
+    https://listino-ferramenta-backend-l56p.onrender.com
 (vedi "const API_BASE" in pwa/index.html se lo cambi)
 
 Backend REST in Python (Flask) + SQLite. Gestisce login, catalogo,
 aumento prezzi per classe articolo, import Excel, preventivi/offerte con
 calcolo IVA e sconti a cascata, e gestione credenziali degli account.
+
+PUBBLICAZIONE SU RENDER.COM (PASSO PASSO)
+---------------------------------------------
+1. Carica il contenuto di questa cartella in un repository GitHub (i file
+   vanno alla radice del repository, non dentro un'ulteriore sottocartella
+   "backend").
+2. Su render.com: "New +" → "Web Service" → collega il repository.
+3. Impostazioni:
+     Runtime:        Python 3
+     Build Command:  pip install -r requirements.txt
+     Start Command:  gunicorn app:app --bind 0.0.0.0:$PORT
+     Instance Type:  Free
+4. In "Environment Variables" aggiungi:
+     SECRET_KEY = una stringa lunga a caso (es. generata con
+                  python3 -c "import secrets; print(secrets.token_hex(32))")
+5. "Create Web Service" e attendi il pallino verde "Live".
+6. Verifica aprendo https://tuo-servizio.onrender.com/api/health
+
+Non serve più aggiungere "&& python3 seed.py" al Build Command: il database
+viene creato automaticamente al primo avvio dal codice stesso (vedi il
+blocco a fine app.py), quindi funziona anche se in futuro cambi Build o
+Start Command per errore.
 
 AVVIO IN LOCALE
 ------------------

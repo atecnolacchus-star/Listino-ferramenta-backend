@@ -71,7 +71,26 @@ CREATE TABLE IF NOT EXISTS quotes (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_quotes_owner ON quotes(owner_id);
+
+CREATE TABLE IF NOT EXISTS clients (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL REFERENCES accounts(id),
+    order_info TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_clients_owner ON clients(owner_id);
 """
+
+
+def ensure_schema(db_path=DB_PATH):
+    """Applica lo schema (CREATE TABLE IF NOT EXISTS ...) a un database già
+    esistente, per aggiungere eventuali tabelle nuove (es. 'clients')
+    introdotte in un aggiornamento, senza toccare gli account/catalogo/
+    preventivi già presenti."""
+    conn = sqlite3.connect(db_path)
+    conn.executescript(SCHEMA)
+    conn.commit()
+    conn.close()
 
 
 def seed(force=False):

@@ -428,10 +428,45 @@ def update_quote(quote_id):
         return err('Non puoi modificare i preventivi di un altro account.', 403)
 
     data = request.get_json(silent=True) or {}
-    status = data.get('status')
-    if status not in ('Da confermare', 'Confermato', 'Annullato'):
-        return err('Stato non valido.')
-    db.execute("UPDATE quotes SET status=? WHERE id=?", (status, quote_id))
+    fields, values = [], []
+
+    if 'status' in data:
+        status = data.get('status')
+        if status not in ('Da confermare', 'Confermato', 'Annullato'):
+            return err('Stato non valido.')
+        fields.append('status=?'); values.append(status)
+
+    # Modifica completa del contenuto (articoli, intestazione, tipo).
+    # Permessa solo al proprietario del preventivo (o al master) e solo se
+    # non è già stato confermato.
+    if 'items' in data or 'orderInfo' in data or 'type' in data:
+        if row['status'] == 'Confermato' and data.get('status') != 'Da confermare':
+            return err('Non è possibile modificare un preventivo già confermato: riportalo prima a "Da confermare".')
+        if 'items' in data:
+            items = data.get('items') or []
+            if not items:
+                return err('Il carrello non può essere vuoto.')
+            totals = compute_totals(items)
+            fields.append('items=?'); values.append(json.dumps(items))
+            fields.append('totals=?'); values.append(json.dumps(totals))
+        if 'orderInfo' in data:
+            order_info = data.get('orderInfo') or {}
+            client = (order_info.get('ragioneSociale') or '').strip()
+            if not client:
+                return err('Inserisci la Ragione sociale del cliente.')
+            fields.append('order_info=?'); values.append(json.dumps(order_info))
+            fields.append('client=?'); values.append(client)
+        if 'type' in data:
+            quote_type = data.get('type')
+            if quote_type not in ('Offerta', 'Preventivo'):
+                return err('Tipo non valido.')
+            fields.append('type=?'); values.append(quote_type)
+
+    if not fields:
+        return err('Nessuna modifica specificata.')
+
+    values.append(quote_id)
+    db.execute(f"UPDATE quotes SET {', '.join(fields)} WHERE id=?", values)
     db.commit()
     row = db.execute("SELECT * FROM quotes WHERE id=?", (quote_id,)).fetchone()
     return jsonify(quote_public(row))
@@ -442,10 +477,82 @@ def health():
     return jsonify({'status': 'ok', 'time': datetime.utcnow().isoformat()})
 
 
+# ------------------------------------------------------------------ clients
+def client_public(row):
+    return {
+        'id': row['id'], 'ownerId': row['owner_id'],
+        'orderInfo': json.loads(row['order_info']), 'createdAt': row['created_at'],
+    }
+
+
+@app.route('/api/clients', methods=['GET'])
+@auth_required()
+def list_clients():
+    db = get_db()
+    rows = db.execute("SELECT * FROM clients WHERE owner_id=? ORDER BY created_at DESC", (g.user['id'],)).fetchall()
+    return jsonify([client_public(r) for r in rows])
+
+
+@app.route('/api/clients', methods=['POST'])
+@auth_required()
+def create_client():
+    data = request.get_json(silent=True) or {}
+    order_info = data.get('orderInfo') or {}
+    if not (order_info.get('ragioneSociale') or '').strip():
+        return err('Inserisci almeno la Ragione sociale.')
+
+    client_id = 'c' + str(int(time.time() * 1000)) + secrets.token_hex(2)
+    created_at = datetime.utcnow().isoformat()
+    db = get_db()
+    db.execute(
+        "INSERT INTO clients (id, owner_id, order_info, created_at) VALUES (?,?,?,?)",
+        (client_id, g.user['id'], json.dumps(order_info), created_at)
+    )
+    db.commit()
+    row = db.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+    return jsonify(client_public(row)), 201
+
+
+@app.route('/api/clients/<client_id>', methods=['PATCH'])
+@auth_required()
+def update_client(client_id):
+    db = get_db()
+    row = db.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+    if not row or row['owner_id'] != g.user['id']:
+        return err('Anagrafica non trovata.', 404)
+    data = request.get_json(silent=True) or {}
+    order_info = data.get('orderInfo') or {}
+    if not (order_info.get('ragioneSociale') or '').strip():
+        return err('Inserisci almeno la Ragione sociale.')
+    db.execute("UPDATE clients SET order_info=? WHERE id=?", (json.dumps(order_info), client_id))
+    db.commit()
+    row = db.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+    return jsonify(client_public(row))
+
+
+@app.route('/api/clients/<client_id>', methods=['DELETE'])
+@auth_required()
+def delete_client(client_id):
+    db = get_db()
+    row = db.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+    if not row or row['owner_id'] != g.user['id']:
+        return err('Anagrafica non trovata.', 404)
+    db.execute("DELETE FROM clients WHERE id=?", (client_id,))
+    db.commit()
+    return jsonify({'ok': True})
+
+
+# Crea il database automaticamente al primo avvio, se non esiste già.
+# Girare qui (fuori da __main__) fa sì che funzioni anche con gunicorn,
+# che si limita a importare questo file senza eseguire il blocco __main__.
+import seed
+if not os.path.exists(DB_PATH):
+    seed.seed()
+else:
+    # Applica eventuali nuove tabelle introdotte in aggiornamenti successivi
+    # (es. "clients") senza toccare account/catalogo/preventivi esistenti.
+    seed.ensure_schema(DB_PATH)
+
 if __name__ == '__main__':
-    if not os.path.exists(DB_PATH):
-        print("Database non trovato: eseguo 'seed.py' automaticamente...")
-        import seed
-        seed.seed()
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=os.environ.get('DEBUG') == '1')
